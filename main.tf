@@ -159,7 +159,7 @@ resource "aws_security_group" "app"{
     protocol = "tcp"
     # 중요: IP가 아니라 '보안 그룹 ID'를 지정합니다.
     # 해당 sg에 속해 있는 데이터만 받겠다는 뜻, web subnet에서 온 것만 받겠다는 뜻
-    security_groups = [aws.security_groups.web.id]
+    security_groups = [aws_security_groups.web.id]
   }
 
   ingress {
@@ -225,11 +225,110 @@ resource "aws_instance" "app"{
 }
 
 output "web_public_ip"{
-  value = aws.instance.web.public_ip
+  value = aws_instance.web.public_ip
   description = "웹 서버의 공인 IP"
 }
 
 output "app_private_ip"{
-  value = aws.instance.app_private_ip
+  value = aws_instance.app_private_ip
   description = "앱 서버의 사설 IP"
+}
+
+# 17. Data Subnet A (기존 A존)
+resource "aws_subnet" "data_a"{
+  vpc_id = aws_vpc.main.id
+  cidr_block = "10.10.3.0/24"
+  availability_zone = "ap_northeast_2a"
+
+  tags = {
+    Name = "my-3tier-data-subnet-a"
+  }
+}
+
+# 18. Data Subnet C (새로운 C존 - RDS 필수 조건!)
+resource "aws_subnet" "data_c"{
+  vpc_id = aws_vpc.main.id
+  cidr_block = "10.10.4.0/24"
+  availability_zone = "ap-northeast-2c"
+
+  tags = {
+    Name = "my-3tier-data-subnet-c"
+  }
+}
+
+# 19. DB 서브넷 그룹 (RDS는 이 그룹을 보고 어디에 들어갈지 정함)
+resource "aws_db_subnet_group" "default"{
+  name = "my-3ter-db-subnet-group"
+  subnet_ids = [aws_subnet.data_a.id,aws_subnet.data_c.id]
+
+  tags = {
+    Name = "My DB subnet group"
+  }
+}
+
+# 20. DB Security Group: 오직 App 서버만 3306 포트로 접근 가능
+resource "aws_security_group" "db"{
+  name = "my-3tier-db-sg"
+  description = "Allow MySQL traafic from App Tier only"
+  vpc_id = aws_vpc.main.id
+
+  # Inbound: App SG 명찰을 단 녀석만 3306(MySQL) 통과
+  ingress{
+    from_port = 3306
+    to_port = 3306
+    protocol = "tcp"
+    security_groups = [aws_security_group.app.id]
+  }
+
+  # Outbound: 보통 DB는 밖으로 나갈 일이 없지만, 관례상 열어둠
+  egress{
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "my-3tier-db-sg"
+  }
+}
+
+# 비밀번호를 입력받기 위한 빈 변수 선언
+variable "db_password"{
+  description = "RDS 데이터베이스 비밀번호를 입력하세요"
+  type = string
+  sensitive = true
+}
+
+# 21. RDS 인스턴스 (MySQL)
+resource "aws_db_instance" "default" {
+  allocated_storage    = 10              # 저장 용량 (10GB)
+  db_name              = "mydb"          # DB 이름
+  engine               = "mysql"         # 엔진 종류
+  engine_version       = "8.0"           # 버전
+  instance_class       = "db.t3.micro"   # 프리티어 무료 등급
+  
+  # 계정 정보
+  username = "admin"
+  password = var.db_password # 입력받은 변수를 사용!
+  
+  # 네트워크 설정
+  db_subnet_group_name   = aws_db_subnet_group.default.name # 아까 만든 그룹
+  vpc_security_group_ids = [aws_security_group.db.id]     # 아까 만든 보안 그룹
+  
+  # 중요: 실습용 설정 (삭제 시 스냅샷 안 찍음)
+  skip_final_snapshot    = true
+  
+  # 중요: 외부에서 절대 접속 불가 (True로 하면 퍼블릭 IP 생김 - 보안 위험)
+  publicly_accessible    = false
+
+  tags = {
+    Name = "my-3tier-rds"
+  }
+}
+
+# 22. RDS 접속 주소 출력
+output "rds_endpoint" {
+  value       = aws_db_instance.default.endpoint
+  description = "RDS 접속 주소 (App 서버에서만 접속 가능)"
 }
