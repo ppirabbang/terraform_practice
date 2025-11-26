@@ -237,6 +237,7 @@ resource "aws_instance" "app"{
 
 output "web_public_ip"{
   value = aws_instance.web.public_ip
+  value = aws_instance.web.public_ip
   description = "웹 서버의 공인 IP"
 }
 
