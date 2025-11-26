@@ -6,7 +6,16 @@ terraform{
       version = "~> 5.0"
     }
   }
+
+  backend "s3" {
+    bucket         = "my-3tier-tfstate-schoo-20241127" # 아까 만든 버킷 이름 (정확해야 함!)
+    key            = "terraform.tfstate"          # S3 안에 저장될 파일 이름
+    region         = "ap-northeast-2"
+    dynamodb_table = "my-3tier-tf-locks"          # 아까 만든 테이블 이름
+    encrypt        = true                         # 전송 중 암호화
+  }
 }
+
 
 # 2. 프로바이더 설정 : 어느 리전에 만들 것인지 지정
 provider "aws" {
@@ -159,7 +168,7 @@ resource "aws_security_group" "app"{
     protocol = "tcp"
     # 중요: IP가 아니라 '보안 그룹 ID'를 지정합니다.
     # 해당 sg에 속해 있는 데이터만 받겠다는 뜻, web subnet에서 온 것만 받겠다는 뜻
-    security_groups = [aws.security_groups.web.id]
+    security_groups = [aws_security_group.web.id]
   }
 
   ingress {
@@ -203,7 +212,8 @@ resource "aws_instance" "web"{
   vpc_security_group_ids = [aws_security_group.web.id]
 
   key_name = "~~"
-
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+  
   tags = {
     Name = "my-3tier-web-server"
   }
@@ -219,17 +229,87 @@ resource "aws_instance" "app"{
 
   key_name = "~~"
 
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
   tags = {
     Name = "my-3tier-app-server"
   }
 }
 
 output "web_public_ip"{
-  value = aws.instance.web.public_ip
+  value = aws_instance.web.public_ip
   description = "웹 서버의 공인 IP"
 }
 
 output "app_private_ip"{
-  value = aws.instance.app_private_ip
+  value = aws_instance.app.private_ip
   description = "앱 서버의 사설 IP"
+}
+
+# 23. 상태 파일 저장용 S3 버킷
+resource "aws_s3_bucket" "tfstate"{
+  bucket = "my-3tier-tfstate-schoo-20241127"
+  tags = {
+    Name = "Terraform State Bucket"
+  }
+}
+
+# 24. S3 버킷 버전 관리 (실수로 지워도 복구 가능하게)
+resource "aws_s3_bucket_versioning" "tfstate"{
+  bucket = aws_s3_bucket.tfstate.id
+  versioning_configuration{
+    status = "Enabled"
+  }
+}
+
+# 25. S3 버킷 암호화 (파일 내용을 암호화해서 저장) -> 보안 필수!
+resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate"{
+  bucket = aws_s3_bucket.tfstate.id
+
+  rule{
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# 26. 잠금 장치용 DynamoDB 테이블
+resource "aws_dynamodb_table" "terraform_locks" {
+  name         = "my-3tier-tf-locks"
+  billing_mode = "PAY_PER_REQUEST" # 쓴 만큼만 비용 지불 (거의 공짜)
+  hash_key     = "LockID"          # 필수: 테라폼은 이 키를 사용해 잠금을 겁니다.
+
+  attribute {
+    name = "LockID"
+    type = "S" # String
+  }
+}
+
+# 27. IAM Role 생성: "EC2가 사용할 수 있는 역할"
+resource "aws_iam_role" "ssm_role"{
+  name = "my-3tier-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+# 28. 정책 연결: AWS가 관리하는 'SSM 필수 권한'을 역할에 붙임
+resource "aws_iam_role_policy_attachment" "ssm_policy"{
+  role = aws_iam_role.ssm_role.name
+  policy_arn = "arn:aws:iam::aws:picliy/AmazonSSMManagedInstanceCore"
+}
+
+# 29. 인스턴스 프로파일: 역할을 EC2에 끼울 수 있게 포장
+resource "aws_iam_instance_profile" "ssm_profile"{
+  name = "my-3tier-ssm-profile"
+  role = aws_iam_role.ssm_role.name
 }
