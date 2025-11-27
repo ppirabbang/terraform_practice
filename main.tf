@@ -237,7 +237,6 @@ resource "aws_instance" "app"{
 
 output "web_public_ip"{
   value = aws_instance.web.public_ip
-  value = aws_instance.web.public_ip
   description = "웹 서버의 공인 IP"
 }
 
@@ -314,3 +313,129 @@ resource "aws_iam_instance_profile" "ssm_profile"{
   name = "my-3tier-ssm-profile"
   role = aws_iam_role.ssm_role.name
 }
+
+# 30. Web Subnet C (ALB 고가용성을 위한 필수 조건)
+resource "aws_subnet" "web_c"{
+  vpc_id = aws_vpc.main.id
+  cidr_block = "10.10.5.0/24"
+  availability_zone = "ap-northeast-2c"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "my-3tier-web-subnet-c"
+  }
+}
+
+# 31. 라우팅 연결 (기존 Public Route Table 재사용)
+resource "aws_route_table_association" "web_c_public"{
+  subnet_id = aws_subnet.web_c.id
+  route_table_id = aws_route_table.public.id
+}
+
+# 32. Application Load Balancer (ALB) 생성
+resource "aws_lb" "web" {
+  name               = "my-3tier-alb"
+  internal           = false             # 인터넷에서 접근 가능 (True면 내부용)
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.web.id] # 일단 Web과 같은 방화벽 사용
+  
+  # 중요: A존과 C존 서브넷을 모두 지정해야 함!
+  subnets            = [aws_subnet.web.id, aws_subnet.web_c.id]
+
+  tags = {
+    Name = "my-3tier-alb"
+  }
+}
+
+# 33. 대상 그룹 (Target Group): "손님을 받을 서버들의 명단"
+resource "aws_lb_target_group" "web" {
+  name     = "my-3tier-web-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+
+  # 상태 검사 (Health Check): 서버가 살아있는지 주기적으로 찌름
+  health_check {
+    path                = "/"    # 루트 경로 확인
+    healthy_threshold   = 2      # 2번 성공하면 정상
+    unhealthy_threshold = 2      # 2번 실패하면 제외
+  }
+}
+
+# 34. 리스너 (Listener): "ALB의 80번 귀를 열어라"
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.web.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  # 기본 행동: 들어오면 Target Group으로 토스해라
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+}
+
+# 35. 등록 (Attachment): 실제 Web 서버를 명단에 추가
+resource "aws_lb_target_group_attachment" "web" {
+  target_group_arn = aws_lb_target_group.web.arn
+  target_id        = aws_instance.web.id # 우리가 만든 그 웹 서버
+  port             = 80
+}
+
+# 36. 접속 주소 출력
+output "alb_dns_name" {
+  value       = aws_lb.web.dns_name
+  description = "웹 사이트 접속 주소 (ALB)"
+}
+
+# 37. ALB 전용 보안 그룹 (인터넷 -> ALB)
+resource "aws_security_group" "alb" {
+  name        = "my-3tier-alb-sg"
+  description = "Allow HTTP from Internet to ALB"
+  vpc_id      = aws_vpc.main.id
+
+  # 인터넷에서 들어오는 80포트 허용
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "my-3tier-alb-sg" }
+}
+
+/*resource "aws_security_group" "web" {
+  name        = "my-3tier-web-sg"
+  # ... (기존 내용) ...
+
+  # [수정] CIDR(0.0.0.0/0)을 지우고, security_groups를 넣습니다.
+  ingress {
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    
+    # 중요: 이제 인터넷이 아니라 "ALB 보안 그룹"을 가진 녀석만 들어올 수 있음!
+    security_groups = [aws_security_group.alb.id] 
+  }
+
+  # ... (egress는 그대로 둠) ...
+}
+
+resource "aws_lb" "web" {
+  name = "my-3tier-alb"
+  # ... (기존 내용) ...
+
+  # [수정] 기존 web.id 대신 새로 만든 alb.id를 적용
+  security_groups = [aws_security_group.alb.id] 
+  
+  # ...
+}
+*/
