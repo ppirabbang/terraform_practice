@@ -220,12 +220,9 @@ resource "aws_security_group" "db"{
     from_port = 0
     to_port = 0
     protocol = "-1"
-<<<<<<< Updated upstream
-    cidr_blocks = []
-=======
+
     cidr_blocks = [aws_vpc.this.cidr_block]
     # 인터넷으로 트래픽이 나가는 대신 vpc 내부로만 나가도록
->>>>>>> Stashed changes
   }
 
   tags = {

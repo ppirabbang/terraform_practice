@@ -29,13 +29,8 @@ variable "private_subnets"{
   description = "Private Subnet 매핑"
   type = map(string)
   default = {
-<<<<<<< Updated upstream
-    "ap-northeast-2a" = "10.0.1.0/24"
-    "ap-northeast-2c" = "10.0.4.0/24"
-=======
     "ap-northeast-2a" = "10.0.2.0/24"
     "ap-northeast-2c" = "10.0.3.0/24"
->>>>>>> Stashed changes
   }
 }
 
@@ -43,11 +38,7 @@ variable "db_subnets" {
   description = "DB subnet 매핑"
   type = map(string)
   default = {
-<<<<<<< Updated upstream
-    "ap-northeast-2a" = "10.0.2.0/24"
-=======
     "ap-northeast-2a" = "10.0.4.0/24"
->>>>>>> Stashed changes
     "ap-northeast-2c" = "10.0.5.0/24"
   }
 }
