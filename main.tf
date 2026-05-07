@@ -97,6 +97,7 @@ resource "aws_route_table_association" "public"{
   for_each = aws_subnet.public
 
   subnet_id = each.value.id
+  #여기서 쓰는 value.id 는 subnet의 메타데이터 전부가 value 일거고 그 중 id를 사용하겠다는 것
   route_table_id = aws_route_table.public.id
 }
 
@@ -105,6 +106,7 @@ resource "aws_route_table_association" "public"{
 # 바로 igw로 보내는게 아님
 # 10. NAT Gateway용 eip 생성
 resource "aws_eip" "nat"{
+  for_each = aws_subnet.public
   domain = "vpc"
 
   tags = {
@@ -114,9 +116,10 @@ resource "aws_eip" "nat"{
 
 # 11. NAT Gateway 생성 (public subnet 중 하나에 배치)
 resource "aws_nat_gateway" "this"{
-  allocation_id = aws_eip.nat.id
+  for_each = aws_subnet.public
+  allocation_id = aws_eip.nat[each.key].id
 
-  subnet_id = aws_subnet.public["ap-northeast-2a"].id
+  subnet_id = each.value.id
 
   tags = {
     Name = "${var.name_prefix}-nat-gw"
@@ -161,6 +164,7 @@ resource "aws_security_group" "alb"{
     from_port = 80
     to_port = 80
     protocol = "tcp"
+    # tcp 허용하는게 http까지 허용
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -216,7 +220,12 @@ resource "aws_security_group" "db"{
     from_port = 0
     to_port = 0
     protocol = "-1"
+<<<<<<< Updated upstream
     cidr_blocks = []
+=======
+    cidr_blocks = [aws_vpc.this.cidr_block]
+    # 인터넷으로 트래픽이 나가는 대신 vpc 내부로만 나가도록
+>>>>>>> Stashed changes
   }
 
   tags = {
@@ -241,6 +250,7 @@ resource "aws_lb" "prod"{
 }
 
 # 19. Target Group 생성
+# target group attachment 가 없으니 콘솔 작업처럼 빈 상태로 진행한 것이 맞음
 resource "aws_lb_target_group" "prod"{
   name = "${var.name_prefix}-tg"
   port = 80
@@ -266,4 +276,136 @@ resource "aws_lb_listener" "http"{
     type = "forward"
     target_group_arn = aws_lb_target_group.prod.arn
   }
+}
+
+# 21. 최신 리눅스 이미지 조회
+data "aws_ami" "amazon_linux_2023"{
+  most_recent = true
+  owners = ["amazon"]
+
+  filter{
+    name = "name"
+    values = ["al2023-ami-2023.*-x86_64"]
+  }
+}
+
+# 22. Lanuch template 생성
+resource "aws_launch_template" "app"{
+  name_prefix = "${var.name_prefix}-lt-"
+  image_id = data.aws_ami.amazon_linux_2023.id
+  instance_type = "t3_micro"
+
+  #네트워크 인터페이스 설정
+  network_interfaces{
+    security_groups = [aws_security_group.app.id]
+
+    associate_public_ip_address = false
+  }
+
+  user_data = base64encdoe(
+    <<-EOF
+    #!/bin/bash
+    yum update -y
+    yum install -y httpd
+    systemctl start httpd
+    systemctl enable httpd
+    echo "<h1>Hello from Terraform!"
+    EOF
+  )
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "${var.name_prefix}-app"
+    }
+  }
+}
+
+#23. Auto Scaling group 생성
+resource "aws_autoscaling_group" "app"{
+  name = "${var.name_prefix}-asg"
+  # ASG가 EC2를 만들 때 어느 서브넷에 만들지 정함
+  vpc_zone_identifier = [for s in aws_subnet.private : s.id]
+
+  min_size = 2
+  max_size = 4
+  desired_capacity = 2
+
+  launch_template{
+    id = aws_launch_template.app.id
+    version = "$Latest"
+  }
+
+  # ASG가 EC2를 새로 만들 때마다 자동으로 ALB 타겟 그룹 명단에 등록
+  target_group_arns = [aws_lb_target_group.prod.arn]
+
+  health_check_type = "ELB"
+  health_check_grace_period = 300
+
+  tag{
+    key = "Name"
+    value = "${var.name_prefix}-asg-instance"
+    propagate_at_launch = true
+  }
+}
+
+#24. DB 서브넷 그룹
+resource "aws_db_subnet_group" "default"{
+  name = "${var.name_prefix}-db-subnet-group"
+
+  subnet_ids = [for s in aws_subnet.db : s.id]
+
+  tags = {
+    Name = "${var.name_prefix}-db-subnet-group"
+  }
+}
+
+#25. RDS 생성
+resource "aws_db_instance" "default" {
+  identifier = "${var.name_prefix}-mysql"
+  allocated_storage = 20
+  storage_type = "gp2"
+  engine = "mysql"
+  engine_version = "8.0"
+  instance_class = "db.t3.micro"
+
+  db_name = "mydb"
+  username = "admin"
+  password = "password1234!"
+
+  db_subnet_group_name = aws_db_subnet_group.default.name
+  vpc_security_group_ids = [aws_security_group.db.id]
+
+  skip_final_snapshot = true
+  publicly_accessible = false
+
+  tags = {
+    Name = "${var.name_prefix}-mysql"
+  }
+}
+
+#26. 로그 저장용 s3 버킷 생성
+resource "aws_s3_bucket" "audit"{
+  bucket = "${var.name_prefix}-audit-log-12345"
+  force_destroy = true
+
+  tags = {
+    Name = "${var.name_prefix}-audit"
+  }
+}
+
+#27. 버킷 퍼블릭 차단
+resource "aws_s3_bucket_public_access_block" "audit"{
+  bucket = aws_s3_bucket.audit.id
+
+  block_public_acls = true
+  ignore_public_acls = true
+  block_public_policy = true
+  restrict_public_buckets = true
+} 
+
+#28. cloudtrail 이 s3에 쓸 수 있도록
+resource "aws_s3_bucket_policy" "audit"{
+  bucket = aws_s3_bucket.audit.id
+  policy = data.aws_iam_policy_document.cloudtrail_to_s3.json
 }
