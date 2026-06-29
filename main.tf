@@ -381,28 +381,15 @@ resource "aws_db_instance" "default" {
   }
 }
 
-#26. 로그 저장용 s3 버킷 생성
-resource "aws_s3_bucket" "audit"{
-  bucket = "${var.name_prefix}-audit-log-12345"
-  force_destroy = true
-
-  tags = {
-    Name = "${var.name_prefix}-audit"
-  }
+module "s3" {
+  source = "./modules/s3-buckets"
+  name_prefix = var.name_prefix
 }
 
-#27. 버킷 퍼블릭 차단
-resource "aws_s3_bucket_public_access_block" "audit"{
-  bucket = aws_s3_bucket.audit.id
-
-  block_public_acls = true
-  ignore_public_acls = true
-  block_public_policy = true
-  restrict_public_buckets = true
-} 
-
-#28. cloudtrail 이 s3에 쓸 수 있도록
-resource "aws_s3_bucket_policy" "audit"{
-  bucket = aws_s3_bucket.audit.id
-  policy = data.aws_iam_policy_document.cloudtrail_to_s3.json
+module "cloudtrail" {
+  source = "./modules/cloudtrail"
+  name_prefix = var.name_prefix
+  audit_bucket_policy_id = module.s3.audit_bucket_policy_id
+  audit_bucket = module.s3.audit_bucket
+  # 자식 모듈의 variable에 선언되어 있고 자식에 전달해줄 값
 }
