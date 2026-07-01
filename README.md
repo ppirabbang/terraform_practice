@@ -1,2 +1,15 @@
 output 은 모듈 나눌 때 모듈 내에서 쓰는 값들을 선언하는게 아니라
 다른 모듈에서 다른 모듈의 값이 필요로 할 때 그걸 output으로 넣어줘서 쓸 수 있게 해주는거임
+
+
+루트 variables.tf 선언
+        ↓
+루트 main.tf module 블록에서 전달
+        ↓
+자식 variables.tf에 선언되어 있어야 받을 수 있음
+        ↓
+자식 main.tf에서 var.xxx로 사용
+
+
+for_each = var.public_subnets 으로 여러 개 만들었으면 nat gateway 만들 때도 for_each = aws_subnet.public 로 여러 개 선언해야 되고
+nat을 쓰는 private subnets 도 여러 개 일테니까 for_each = aws_subnet.private 로 받아줘야 됨
